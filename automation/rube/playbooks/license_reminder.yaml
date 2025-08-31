@@ -1,0 +1,155 @@
+# License Expiry Reminder Playbook
+# Monitors license expiry and sends reminders
+
+name: "license-expiry-reminder"
+description: "Monitor and remind users of upcoming license expiries"
+version: "1.0.0"
+
+# Triggers
+triggers:
+  - type: "cron"
+    schedule: "0 9 * * *"  # Daily at 9 AM IST
+    timezone: "Asia/Kolkata"
+  - type: "manual"
+    description: "Manual trigger for testing"
+
+# MCP-Zero Configuration
+mcp_zero:
+  discovery_query: "calendar management, email sending, notification, reminder system"
+  required_capabilities:
+    - "calendar_event_creation"
+    - "email_sending"
+    - "sms_sending"
+    - "database_querying"
+
+# Workflow Steps
+steps:
+  - name: "fetch_expiring_licenses"
+    description: "Get licenses expiring in the next 30 days"
+    tool: "backend_api"
+    inputs:
+      method: "GET"
+      endpoint: "/users/kyc/documents"
+      params:
+        document_type: "license"
+        expiry_within_days: 30
+    outputs:
+      expiring_licenses: "{{ result.data }}"
+    
+  - name: "group_by_urgency"
+    description: "Group licenses by urgency (7, 14, 30 days)"
+    tool: "data_processor"  # MCP-Zero will discover appropriate tool
+    inputs:
+      data: "{{ steps.fetch_expiring_licenses.expiring_licenses }}"
+      group_by: "days_to_expiry"
+      categories:
+        urgent: 7
+        warning: 14
+        notice: 30
+    outputs:
+      urgency_groups: "{{ result.groups }}"
+    
+  - name: "send_urgent_notifications"
+    description: "Send SMS for licenses expiring in 7 days"
+    condition: "{{ steps.group_by_urgency.urgency_groups.urgent | length > 0 }}"
+    tool: "sms_sender"  # MCP-Zero discovery
+    inputs:
+      recipients: "{{ steps.group_by_urgency.urgency_groups.urgent | map('phone') }}"
+      message: |
+        🚨 URGENT: Your driving license expires in {{ item.days_to_expiry }} days!
+        
+        License: {{ item.license_number }}
+        Expiry: {{ item.expiry_date }}
+        
+        Please renew immediately to avoid service disruption.
+        
+        - EV Platform Team
+    
+  - name: "send_email_reminders"
+    description: "Send email reminders for all expiring licenses"
+    tool: "email_sender"  # MCP-Zero discovery
+    inputs:
+      recipients: "{{ steps.fetch_expiring_licenses.expiring_licenses | map('user_email') }}"
+      subject: "License Renewal Reminder - EV Platform"
+      template: "license_reminder"
+      data:
+        licenses: "{{ steps.fetch_expiring_licenses.expiring_licenses }}"
+    
+  - name: "create_calendar_events"
+    description: "Create calendar reminders for legal team"
+    tool: "calendar_manager"  # MCP-Zero discovery
+    inputs:
+      calendar_id: "legal@evplatform.com"
+      events: |
+        {{ steps.group_by_urgency.urgency_groups.urgent | map({
+          'title': 'License Expiry Follow-up: ' + item.user_name,
+          'date': item.expiry_date,
+          'description': 'User: ' + item.user_name + '\nLicense: ' + item.license_number + '\nPhone: ' + item.phone
+        }) }}
+    
+  - name: "slack_daily_digest"
+    description: "Send daily digest to operations team"
+    tool: "slack_notify"
+    inputs:
+      channel: "#license-tracking"
+      message: |
+        📋 Daily License Expiry Report - {{ today() }}
+        
+        🚨 Urgent (≤7 days): {{ steps.group_by_urgency.urgency_groups.urgent | length }}
+        ⚠️ Warning (≤14 days): {{ steps.group_by_urgency.urgency_groups.warning | length }}
+        ℹ️ Notice (≤30 days): {{ steps.group_by_urgency.urgency_groups.notice | length }}
+        
+        Total notifications sent: {{ steps.send_urgent_notifications.sent_count + steps.send_email_reminders.sent_count }}
+        
+        {% if steps.group_by_urgency.urgency_groups.urgent | length > 0 %}
+        *Urgent Cases:*
+        {% for license in steps.group_by_urgency.urgency_groups.urgent %}
+        • {{ license.user_name }} - {{ license.license_number }} ({{ license.days_to_expiry }} days)
+        {% endfor %}
+        {% endif %}
+    
+  - name: "update_notion_log"
+    description: "Update Notion run log with execution results"
+    tool: "notion_create"
+    inputs:
+      database_id: "{{ env.NOTION_RUN_LOG_DB_ID }}"
+      properties:
+        Title: "License Reminder Run - {{ today() }}"
+        Type: "Scheduled"
+        Status: "Completed"
+        Licenses Processed: "{{ steps.fetch_expiring_licenses.expiring_licenses | length }}"
+        Notifications Sent: "{{ steps.send_urgent_notifications.sent_count + steps.send_email_reminders.sent_count }}"
+        Urgent Cases: "{{ steps.group_by_urgency.urgency_groups.urgent | length }}"
+        Execution Time: "{{ execution_time }}"
+        Timestamp: "{{ now() }}"
+
+# Error Handling
+error_handling:
+  retry_attempts: 3
+  retry_delay: 30  # seconds
+  
+  on_failure:
+    - tool: "slack_notify"
+      inputs:
+        channel: "#ev-platform-alerts"
+        message: |
+          🚨 License Reminder Workflow Failed
+          
+          Error: {{ error.message }}
+          Step: {{ error.step }}
+          Timestamp: {{ now() }}
+          
+          Manual intervention required for license tracking.
+          
+    - tool: "backend_api"
+      inputs:
+        method: "POST"
+        endpoint: "/audit"
+        data:
+          event_type: "automation_failure"
+          entity_type: "workflow"
+          action: "license_reminder_failed"
+          details:
+            error_message: "{{ error.message }}"
+            failed_step: "{{ error.step }}"
+            execution_id: "{{ execution_id }}"

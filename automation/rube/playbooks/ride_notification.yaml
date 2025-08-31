@@ -1,0 +1,142 @@
+# Ride Paid Notification Playbook
+# Handles ride payment confirmations and notifications
+
+name: "ride-paid-notification"
+description: "Process ride payment confirmations and send notifications"
+version: "1.0.0"
+
+# Triggers
+triggers:
+  - type: "webhook"
+    path: "/ride/paid"
+    method: "POST"
+  - type: "api_event"
+    source: "backend"
+    event_type: "payment_status_updated"
+    filter:
+      entity_type: "ride"
+      status: "completed"
+
+# Static Tools (Critical path - no MCP-Zero)
+tools:
+  - "backend_api"
+  - "slack_notify"
+  - "notification_sender"
+  - "driver_matcher"
+
+# Workflow Steps
+steps:
+  - name: "fetch_ride_details"
+    description: "Get complete ride information"
+    tool: "backend_api"
+    inputs:
+      method: "GET"
+      endpoint: "/rides/{{ trigger.data.entity_id }}"
+    outputs:
+      ride: "{{ result }}"
+      
+  - name: "find_available_driver"
+    description: "Find and assign nearby driver"
+    tool: "driver_matcher"
+    inputs:
+      pickup_location:
+        lat: "{{ steps.fetch_ride_details.ride.pickup_lat }}"
+        lng: "{{ steps.fetch_ride_details.ride.pickup_lng }}"
+      vehicle_type: "{{ steps.fetch_ride_details.ride.vehicle_type }}"
+      ride_id: "{{ trigger.data.entity_id }}"
+    outputs:
+      driver_id: "{{ result.driver_id }}"
+      driver_eta: "{{ result.eta_minutes }}"
+      driver_phone: "{{ result.driver_phone }}"
+      driver_name: "{{ result.driver_name }}"
+    
+  - name: "assign_driver_to_ride"
+    description: "Update ride with assigned driver"
+    condition: "{{ steps.find_available_driver.driver_id is defined }}"
+    tool: "backend_api"
+    inputs:
+      method: "PUT"
+      endpoint: "/rides/{{ trigger.data.entity_id }}"
+      data:
+        driver_id: "{{ steps.find_available_driver.driver_id }}"
+        status: "assigned"
+    
+  - name: "notify_passenger"
+    description: "Notify passenger about driver assignment"
+    condition: "{{ steps.assign_driver_to_ride.success }}"
+    tool: "notification_sender"
+    inputs:
+      user_id: "{{ steps.fetch_ride_details.ride.passenger_id }}"
+      type: "push_notification"
+      title: "Driver Assigned!"
+      message: |
+        🚗 {{ steps.find_available_driver.driver_name }} is coming to pick you up
+        
+        Vehicle: {{ steps.fetch_ride_details.ride.vehicle_type }}
+        ETA: {{ steps.find_available_driver.driver_eta }} minutes
+        Contact: {{ steps.find_available_driver.driver_phone }}
+    
+  - name: "notify_driver"
+    description: "Notify driver about new ride assignment"
+    condition: "{{ steps.assign_driver_to_ride.success }}"
+    tool: "notification_sender"
+    inputs:
+      user_id: "{{ steps.find_available_driver.driver_id }}"
+      type: "push_notification"
+      title: "New Ride Assignment"
+      message: |
+        🎯 New ride assigned to you
+        
+        Pickup: {{ steps.fetch_ride_details.ride.pickup_address }}
+        Drop: {{ steps.fetch_ride_details.ride.drop_address }}
+        Fare: ₹{{ steps.fetch_ride_details.ride.estimated_fare }}
+    
+  - name: "slack_ops_notification"
+    description: "Notify operations about ride assignment"
+    tool: "slack_notify"
+    inputs:
+      channel: "#ride-ops"
+      message: |
+        🚗 Ride Assignment Completed
+        
+        Ride ID: {{ trigger.data.entity_id }}
+        Driver: {{ steps.find_available_driver.driver_name }}
+        ETA: {{ steps.find_available_driver.driver_eta }} min
+        Route: {{ steps.fetch_ride_details.ride.pickup_address }} → {{ steps.fetch_ride_details.ride.drop_address }}
+        
+  - name: "handle_no_driver_available"
+    description: "Handle case when no driver is available"
+    condition: "{{ steps.find_available_driver.driver_id is not defined }}"
+    tool: "slack_notify"
+    inputs:
+      channel: "#ride-ops"
+      message: |
+        ⚠️ No Driver Available for Ride {{ trigger.data.entity_id }}
+        
+        Location: {{ steps.fetch_ride_details.ride.pickup_address }}
+        Vehicle Type: {{ steps.fetch_ride_details.ride.vehicle_type }}
+        
+        Manual assignment required.
+        
+  - name: "audit_assignment"
+    description: "Log ride assignment to audit trail"
+    tool: "backend_api"
+    inputs:
+      method: "POST"
+      endpoint: "/audit"
+      data:
+        event_type: "ride_assignment_processed"
+        entity_type: "ride"
+        entity_id: "{{ trigger.data.entity_id }}"
+        action: "driver_assignment"
+        details:
+          driver_assigned: "{{ steps.assign_driver_to_ride.success }}"
+          driver_id: "{{ steps.find_available_driver.driver_id }}"
+          assignment_time: "{{ now() }}"
+          processing_duration: "{{ execution_time }}"
+
+# Performance Targets
+sla:
+  max_execution_time: 30  # seconds
+  success_rate_target: 95  # percentage
+  driver_assignment_rate_target: 80  # percentage

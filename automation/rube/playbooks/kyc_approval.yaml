@@ -1,0 +1,140 @@
+# KYC Approval Loop Playbook
+# Handles KYC document processing and approval workflow
+
+name: "kyc-approval-loop"
+description: "Process KYC documents and handle approval workflow"
+version: "1.0.0"
+
+# Triggers
+triggers:
+  - type: "webhook"
+    path: "/kyc/document-uploaded"
+    method: "POST"
+  - type: "api_event"
+    source: "backend"
+    event_type: "kyc_document_uploaded"
+
+# MCP-Zero Tool Discovery
+mcp_zero:
+  discovery_query: "document processing, OCR, compliance verification, approval workflow"
+  required_capabilities:
+    - "document_extraction"
+    - "text_analysis"
+    - "notification_sending"
+    - "database_updates"
+  
+  # Static fallback tools
+  fallback_tools:
+    - "backend_api"
+    - "slack_notify"
+    - "notion_create"
+
+# Workflow Steps
+steps:
+  - name: "extract_document_data"
+    description: "Extract data from uploaded KYC document"
+    tool: "document_extractor"  # MCP-Zero will discover appropriate tool
+    inputs:
+      document_url: "{{ trigger.data.document_url }}"
+      document_type: "{{ trigger.data.document_type }}"
+    outputs:
+      extracted_data: "{{ result.extracted_data }}"
+      confidence_score: "{{ result.confidence }}"
+    
+  - name: "validate_document"
+    description: "Validate extracted document data"
+    tool: "compliance_validator"  # MCP-Zero discovery
+    inputs:
+      document_type: "{{ trigger.data.document_type }}"
+      extracted_data: "{{ steps.extract_document_data.extracted_data }}"
+      user_id: "{{ trigger.data.user_id }}"
+    outputs:
+      is_valid: "{{ result.is_valid }}"
+      validation_errors: "{{ result.errors }}"
+    
+  - name: "auto_approve_or_flag"
+    description: "Auto-approve valid documents or flag for manual review"
+    condition: "{{ steps.validate_document.is_valid == true and steps.extract_document_data.confidence_score > 0.85 }}"
+    tool: "backend_api"
+    inputs:
+      method: "POST"
+      endpoint: "/users/callbacks/kyc"
+      data:
+        user_id: "{{ trigger.data.user_id }}"
+        document_id: "{{ trigger.data.document_id }}"
+        status: "approved"
+        extracted_data: "{{ steps.extract_document_data.extracted_data }}"
+    
+  - name: "flag_for_manual_review"
+    description: "Flag document for manual review"
+    condition: "{{ steps.validate_document.is_valid == false or steps.extract_document_data.confidence_score <= 0.85 }}"
+    tool: "slack_notify"
+    inputs:
+      channel: "#kyc-review"
+      message: |
+        🔍 KYC Document requires manual review
+        
+        User ID: {{ trigger.data.user_id }}
+        Document Type: {{ trigger.data.document_type }}
+        Confidence Score: {{ steps.extract_document_data.confidence_score }}
+        
+        Validation Issues:
+        {{ steps.validate_document.validation_errors | join('\n') }}
+        
+        [Review Document]({{ trigger.data.document_url }})
+    
+  - name: "log_to_notion"
+    description: "Log KYC processing to Notion run log"
+    tool: "notion_create"
+    inputs:
+      database_id: "{{ env.NOTION_RUN_LOG_DB_ID }}"
+      properties:
+        Title: "KYC Processing - {{ trigger.data.user_id }}"
+        Status: "{{ steps.auto_approve_or_flag.success and 'Auto-Approved' or 'Manual Review' }}"
+        Document Type: "{{ trigger.data.document_type }}"
+        Confidence: "{{ steps.extract_document_data.confidence_score }}"
+        Timestamp: "{{ now() }}"
+        
+  - name: "audit_log"
+    description: "Write audit log entry"
+    tool: "backend_api"
+    inputs:
+      method: "POST"
+      endpoint: "/audit"
+      data:
+        event_type: "kyc_processing_completed"
+        entity_type: "kyc_document"
+        entity_id: "{{ trigger.data.document_id }}"
+        action: "automated_processing"
+        details:
+          confidence_score: "{{ steps.extract_document_data.confidence_score }}"
+          auto_approved: "{{ steps.auto_approve_or_flag.success }}"
+          processing_duration: "{{ execution_time }}"
+
+# Error Handling
+error_handling:
+  on_failure:
+    - tool: "slack_notify"
+      inputs:
+        channel: "#ev-platform-alerts"
+        message: |
+          ❌ KYC Processing Failed
+          
+          User ID: {{ trigger.data.user_id }}
+          Document ID: {{ trigger.data.document_id }}
+          Error: {{ error.message }}
+          
+          Manual intervention required.
+          
+    - tool: "backend_api"
+      inputs:
+        method: "POST"
+        endpoint: "/audit"
+        data:
+          event_type: "kyc_processing_failed"
+          entity_type: "kyc_document"
+          entity_id: "{{ trigger.data.document_id }}"
+          action: "error"
+          details:
+            error_message: "{{ error.message }}"
+            stack_trace: "{{ error.stack }}"

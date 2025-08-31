@@ -1,0 +1,159 @@
+# Rental Booked Notification Playbook
+# Handles rental booking confirmations and notifications
+
+name: "rental-booked-notification"
+description: "Process rental bookings and send confirmations"
+version: "1.0.0"
+
+# Triggers
+triggers:
+  - type: "webhook"
+    path: "/rental/booked"
+    method: "POST"
+  - type: "api_event"
+    source: "backend"
+    event_type: "payment_status_updated"
+    filter:
+      entity_type: "rental"
+      status: "completed"
+
+# Static Tools (Critical path)
+tools:
+  - "backend_api"
+  - "slack_notify"
+  - "notification_sender"
+  - "calendar_manager"
+
+# Workflow Steps
+steps:
+  - name: "fetch_rental_details"
+    description: "Get complete rental and vehicle information"
+    tool: "backend_api"
+    inputs:
+      method: "GET"
+      endpoint: "/rentals/{{ trigger.data.entity_id }}"
+    outputs:
+      rental: "{{ result }}"
+      
+  - name: "notify_renter"
+    description: "Send booking confirmation to renter"
+    tool: "notification_sender"
+    inputs:
+      user_id: "{{ steps.fetch_rental_details.rental.renter_id }}"
+      type: "push_notification"
+      title: "Rental Confirmed!"
+      message: |
+        🎉 Your {{ steps.fetch_rental_details.rental.vehicle.make }} {{ steps.fetch_rental_details.rental.vehicle.model }} is booked!
+        
+        📅 {{ steps.fetch_rental_details.rental.start_time | date('MMM d, h:mm a') }} - {{ steps.fetch_rental_details.rental.end_time | date('MMM d, h:mm a') }}
+        💰 Total: ₹{{ steps.fetch_rental_details.rental.total_amount }}
+        🏦 Deposit: ₹{{ steps.fetch_rental_details.rental.deposit_amount }}
+        
+        Vehicle location will be shared 30 minutes before start time.
+    
+  - name: "notify_vehicle_owner"
+    description: "Notify vehicle owner about new booking"
+    tool: "notification_sender"
+    inputs:
+      user_id: "{{ steps.fetch_rental_details.rental.vehicle.owner_id }}"
+      type: "push_notification"
+      title: "New Rental Booking"
+      message: |
+        📋 Your {{ steps.fetch_rental_details.rental.vehicle.make }} {{ steps.fetch_rental_details.rental.vehicle.model }} has been booked
+        
+        Renter: {{ steps.fetch_rental_details.rental.renter.full_name }}
+        Duration: {{ steps.fetch_rental_details.rental.start_time | date('MMM d') }} - {{ steps.fetch_rental_details.rental.end_time | date('MMM d') }}
+        Earnings: ₹{{ steps.fetch_rental_details.rental.total_amount * 0.8 }} (after platform fee)
+    
+  - name: "create_calendar_reminders"
+    description: "Create calendar events for rental start/end"
+    tool: "calendar_manager"
+    inputs:
+      events:
+        - title: "Rental Start - {{ steps.fetch_rental_details.rental.vehicle.make }} {{ steps.fetch_rental_details.rental.vehicle.model }}"
+          start_time: "{{ steps.fetch_rental_details.rental.start_time }}"
+          attendees: 
+            - "{{ steps.fetch_rental_details.rental.renter.email }}"
+            - "{{ steps.fetch_rental_details.rental.vehicle.owner.email }}"
+          description: |
+            Rental Details:
+            Vehicle: {{ steps.fetch_rental_details.rental.vehicle.registration_number }}
+            Location: {{ steps.fetch_rental_details.rental.vehicle.location_address }}
+            Contact Owner: {{ steps.fetch_rental_details.rental.vehicle.owner.phone }}
+            
+        - title: "Rental End - Return Vehicle"
+          start_time: "{{ steps.fetch_rental_details.rental.end_time }}"
+          attendees: 
+            - "{{ steps.fetch_rental_details.rental.renter.email }}"
+          description: "Remember to return the vehicle and submit return photos"
+    
+  - name: "slack_booking_notification"
+    description: "Notify operations team"
+    tool: "slack_notify"
+    inputs:
+      channel: "#rental-ops"
+      message: |
+        🚗 New Rental Booking Confirmed
+        
+        Rental ID: {{ trigger.data.entity_id }}
+        Vehicle: {{ steps.fetch_rental_details.rental.vehicle.make }} {{ steps.fetch_rental_details.rental.vehicle.model }}
+        Renter: {{ steps.fetch_rental_details.rental.renter.full_name }}
+        Owner: {{ steps.fetch_rental_details.rental.vehicle.owner.full_name }}
+        
+        📅 {{ steps.fetch_rental_details.rental.start_time | date('MMM d, h:mm a') }} - {{ steps.fetch_rental_details.rental.end_time | date('MMM d, h:mm a') }}
+        💰 Amount: ₹{{ steps.fetch_rental_details.rental.total_amount }}
+        🏦 Deposit: ₹{{ steps.fetch_rental_details.rental.deposit_amount }}
+    
+  - name: "schedule_location_sharing"
+    description: "Schedule location sharing 30 minutes before start"
+    tool: "scheduler"
+    inputs:
+      schedule_time: "{{ steps.fetch_rental_details.rental.start_time | subtract_minutes(30) }}"
+      webhook_url: "/automation/share-vehicle-location"
+      payload:
+        rental_id: "{{ trigger.data.entity_id }}"
+        action: "share_location"
+    
+  - name: "audit_booking_processed"
+    description: "Log booking processing completion"
+    tool: "backend_api"
+    inputs:
+      method: "POST"
+      endpoint: "/audit"
+      data:
+        event_type: "rental_booking_processed"
+        entity_type: "rental"
+        entity_id: "{{ trigger.data.entity_id }}"
+        action: "notifications_sent"
+        details:
+          notifications_sent: 2
+          calendar_events_created: 2
+          processing_time: "{{ execution_time }}"
+
+# Error Handling
+error_handling:
+  on_failure:
+    - tool: "slack_notify"
+      inputs:
+        channel: "#ev-platform-alerts"
+        message: |
+          🚨 Rental Notification Workflow Failed
+          
+          Rental ID: {{ trigger.data.entity_id }}
+          Error: {{ error.message }}
+          Step: {{ error.step }}
+          
+          Manual follow-up required for booking confirmation.
+          
+    - tool: "backend_api"
+      inputs:
+        method: "POST"
+        endpoint: "/audit"
+        data:
+          event_type: "automation_failure"
+          entity_type: "rental"
+          entity_id: "{{ trigger.data.entity_id }}"
+          action: "notification_failed"
+          details:
+            error_message: "{{ error.message }}"
+            failed_step: "{{ error.step }}"
