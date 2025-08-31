@@ -1,104 +1,107 @@
-## MCP-Zero: Active Tool Discovery for Autonomous LLM Agents
+# EV Platform: Ride-Hailing, P2P Rentals & Parcel Delivery
 
-<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-  <!-- <img src="assets/robot.png" alt="MCP-Zero Robot" width="24" height="24"> -->
-  <a href="https://arxiv.org/abs/2506.01056">
-    <img src="https://img.shields.io/badge/Paper-arXiv-red">
-  </a>
-  <a href="https://arxiv.org/abs/2506.01056">
-    https://arxiv.org/abs/2506.01056
-  </a>
-</div>
+A comprehensive electric vehicle platform with ride-hailing, peer-to-peer rentals, parcel delivery, and compliance management.
 
+## 🚗 Platform Overview
 
-Thanks for your attention for MCP-Zero! 🤗
+### Core Services
+- **Book Ride**: Ride-hailing service for passengers
+- **List My EV**: Vehicle owners can list their EVs for rental
+- **Rent EV**: Users can rent EVs from other users
+- **Parcel Delivery**: Send packages with ride-sharing
+- **Rewards System**: Points-based loyalty program
+- **Compliance Hub**: KYC, license tracking, and regulatory compliance
 
-We have now open-sourced the code involved in the paper. We will continue to update our work, explore its application in the industry, and continue to expand this project.
+### Architecture
+- **Mobile App**: React Native (Android/iOS)
+- **Backend**: FastAPI + PostgreSQL
+- **Payments**: Hyperswitch integration
+- **Automation**: Rube + n8n workflows
+- **AI Layer**: vLLM/Ollama for document processing
+- **MCP-Zero**: Dynamic tool discovery for automations
 
-
-<div align="center">
-  <img src="assets/fig1.png" alt="MCP-Zero workflow">
-  <p> Using MCP-Zero to proactively construct toolchains for "Making a great meal"</p>
-</div>
-
-
-### Method: MCP-Zero
+## 🏗️ Project Structure
 
 ```
-MCP-zero/
-├── experiment_apibank.py       # experiments: APIBank
-├── experiment_mcptools.py      # experiments: mcp_tools (needle test)
-├── matcher.py                  # code for similarity matching
-├── prompt_guide/               # prompts for our method
-├── reformatter.py              # json formatter for tool description
-├── sampler.py                  # sampler for selecting target tool
-├── test_cases.jsonl            # testcase for the matcher
-├── test_matcher.py             # unit test for the matcher
-└── utils.py                    # utils: grid_search
+ev-platform/
+├── backend/                 # FastAPI services
+├── mobile/                  # React Native app
+├── automations/             # Rube + n8n workflows
+├── ai-layer/               # vLLM/Ollama services
+├── docs/                   # API docs & schemas
+├── scripts/                # Test suites & utilities
+└── docker/                 # Containerization
 ```
 
-We have now released our code for the paper. The code in the paper implements retrieval capabilities and achieves concrete results in experiments.
+## 🚀 Quick Start
 
-In our future work, we are committed to applying MCP-zero to the industry, so other modules still need to be involved, such as the dynamic deployment of MCP servers, the environment deployment for GAIA test, etc. We will continue to improve our work, and thank you all for your attention to this work. Leave a star🌟 to let me know you are staying updated :D
-
-
-
-### Dataset: MCP-tools
-
-- **Google Drive**: [Download Link](https://drive.google.com/file/d/1RjBGU-AGdHdhUABoeYSztbfQlD0hjUBn/view?usp=sharing)
-- **Huggingface Link**: Coming soon
-- **Put the file at**: `./MCP-tools/mcp_tools_with_embedding.json`
-
-
-**Introduction**: A dataset containing all filtered tools (308 servers and 2,797 tools in total) from the MCP official repo.
-
-**Data structure**:
-```
-{
-  "server_name": string, // The name of the MCP server, extracted or inferred from the README
-  "server_summary": string, // A summary of the server's purpose and capabilities, based on all relevant parts of the README.
-  "server_description": string, // Description from metadata. 
-  "description_embedding": float[3072], // The embedding of the server description from text-embedding-3-large
-  "summary_embedding": float[3072], // The embedding of the server summary from text-embedding-3-large
-  "tools": [
-    {
-      "name": string, // The function/tool name
-      "description": string, // A concise description of what the tool does
-      "description_embedding": float[3072], // The embedding of the tool description from text-embedding-3-large
-      "parameter": { // A dictionary of input parameters, being included if explicitly defined
-        "param1": "(type) description1",
-        "param2": "(Optional, type) description2"
-      }
-    }
-  ]
-}
+### Backend Setup
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload
 ```
 
-**Build dataset on your own**: If you want to build custom dataset for MCP servers, you may follow the code under the `MCP-tools/build_data` folder.
-
-```
-MCP-tools/
-├── build_data
-│   ├── get_server_summary.py       # code to extract structural data for MCP server's ReadMe file
-│   ├── run_vllm.sh                 # deploy the Qwen2.5-72B-Instruct model with VLLM
-│   └── server_summary.prompt       # the prompt for extracting dataset
-└── download_data.md
+### Mobile App
+```bash
+cd mobile
+npm install
+npx expo start
 ```
 
-
-### Citation
-
-> Citation makes me happy.
-> 
->   --Shakespeare
->   ~~(just for fun :D)~~
-
-```bibtex
-@article{fei2025mcp,
-  title={MCP-Zero: Active Tool Discovery for Autonomous LLM Agents},
-  author={Fei, Xiang and Zheng, Xiawu and Feng, Hao},
-  journal={arXiv preprint arXiv:2506.01056},
-  year={2025}
-}
+### Automations
+```bash
+cd automations
+# Start Rube workspace
+# Configure n8n workflows
 ```
 
+## 📋 MVP Task Board
+
+### Week 1
+- [ ] Backend APIs (Users, Rides, Vehicles, Payments)
+- [ ] Mobile app navigation & ride booking
+- [ ] Hyperswitch payment integration
+- [ ] Basic automation workflows
+
+### Week 2
+- [ ] P2P rental marketplace
+- [ ] Rewards system
+- [ ] Compliance workflows
+- [ ] QA testing & launch prep
+
+## 🔧 Key Integrations
+
+- **Hyperswitch**: Payment processing
+- **Slack**: Notifications & approvals
+- **Twilio**: SMS communications
+- **Notion**: Task tracking & documentation
+- **MCP-Zero**: Dynamic automation tooling
+
+## 📱 Mobile App Features
+
+- Bottom tab navigation
+- Ride booking with real-time tracking
+- EV rental marketplace
+- Wallet & rewards management
+- Compliance hub for KYC/licensing
+
+## 🔒 Compliance & Security
+
+- KYC verification workflows
+- License expiry tracking
+- Audit logging for all transactions
+- Police verification callbacks
+- Fraud detection systems
+
+## 📊 Monitoring & Analytics
+
+- Real-time ride monitoring
+- Listing approval workflows
+- Booking analytics
+- Performance dashboards
+- Error tracking & alerting
+
+---
+
+*Built with FastAPI, React Native, and MCP-Zero automation*
