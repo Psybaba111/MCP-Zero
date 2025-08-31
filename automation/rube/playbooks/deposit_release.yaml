@@ -1,0 +1,151 @@
+# Deposit Release Playbook
+# Handles rental return and deposit release automation
+
+name: "rental-return-deposit-release"
+description: "Process vehicle returns and release security deposits"
+version: "1.0.0"
+
+# Triggers
+triggers:
+  - type: "webhook"
+    path: "/rental/returned"
+    method: "POST"
+  - type: "api_event"
+    source: "backend"
+    event_type: "deposit_release"
+
+# MCP-Zero Configuration
+mcp_zero:
+  discovery_query: "payment processing, refund handling, deposit release, financial operations"
+  required_capabilities:
+    - "payment_processing"
+    - "refund_creation"
+    - "image_analysis"
+    - "damage_assessment"
+
+# Workflow Steps
+steps:
+  - name: "fetch_rental_details"
+    description: "Get complete rental and return information"
+    tool: "backend_api"
+    inputs:
+      method: "GET"
+      endpoint: "/rentals/{{ trigger.data.rental_id }}"
+    outputs:
+      rental: "{{ result }}"
+      
+  - name: "analyze_return_photos"
+    description: "Analyze return photos for damage assessment"
+    condition: "{{ steps.fetch_rental_details.rental.return_photos | length > 0 }}"
+    tool: "image_analyzer"  # MCP-Zero discovery
+    inputs:
+      images: "{{ steps.fetch_rental_details.rental.return_photos }}"
+      analysis_type: "damage_detection"
+      vehicle_type: "{{ steps.fetch_rental_details.rental.vehicle.vehicle_type }}"
+    outputs:
+      damage_detected: "{{ result.has_damage }}"
+      damage_severity: "{{ result.severity }}"
+      damage_description: "{{ result.description }}"
+    
+  - name: "calculate_deductions"
+    description: "Calculate any deductions from deposit"
+    tool: "financial_calculator"  # MCP-Zero discovery
+    inputs:
+      base_deposit: "{{ steps.fetch_rental_details.rental.deposit_amount }}"
+      damage_detected: "{{ steps.analyze_return_photos.damage_detected }}"
+      damage_severity: "{{ steps.analyze_return_photos.damage_severity }}"
+      late_return: "{{ steps.fetch_rental_details.rental.end_time < now() }}"
+      rental_duration: "{{ steps.fetch_rental_details.rental.total_hours }}"
+    outputs:
+      deduction_amount: "{{ result.deductions }}"
+      refund_amount: "{{ result.refund_amount }}"
+      deduction_reasons: "{{ result.reasons }}"
+    
+  - name: "process_refund"
+    description: "Process deposit refund through payment gateway"
+    condition: "{{ steps.calculate_deductions.refund_amount > 0 }}"
+    tool: "payment_processor"  # MCP-Zero discovery
+    inputs:
+      payment_intent_id: "{{ steps.fetch_rental_details.rental.deposit_payment_intent_id }}"
+      refund_amount: "{{ steps.calculate_deductions.refund_amount }}"
+      reason: "rental_deposit_release"
+      metadata:
+        rental_id: "{{ trigger.data.rental_id }}"
+        deductions: "{{ steps.calculate_deductions.deduction_amount }}"
+    outputs:
+      refund_id: "{{ result.refund_id }}"
+      refund_status: "{{ result.status }}"
+    
+  - name: "notify_user"
+    description: "Notify user about deposit release"
+    tool: "notification_sender"  # MCP-Zero discovery
+    inputs:
+      user_id: "{{ steps.fetch_rental_details.rental.renter_id }}"
+      type: "push_notification"
+      title: "Deposit Released"
+      message: |
+        {% if steps.calculate_deductions.refund_amount == steps.fetch_rental_details.rental.deposit_amount %}
+        ✅ Full deposit of ₹{{ steps.fetch_rental_details.rental.deposit_amount }} has been refunded!
+        {% else %}
+        💰 Deposit refund: ₹{{ steps.calculate_deductions.refund_amount }}
+        Deductions: ₹{{ steps.calculate_deductions.deduction_amount }}
+        {% endif %}
+        
+        Thank you for using EV Platform!
+    
+  - name: "slack_finance_notification"
+    description: "Notify finance team about deposit processing"
+    tool: "slack_notify"
+    inputs:
+      channel: "#finance-ops"
+      message: |
+        💰 Deposit Processed - Rental {{ trigger.data.rental_id }}
+        
+        User: {{ steps.fetch_rental_details.rental.renter.full_name }}
+        Vehicle: {{ steps.fetch_rental_details.rental.vehicle.make }} {{ steps.fetch_rental_details.rental.vehicle.model }}
+        
+        Original Deposit: ₹{{ steps.fetch_rental_details.rental.deposit_amount }}
+        Refund Amount: ₹{{ steps.calculate_deductions.refund_amount }}
+        Deductions: ₹{{ steps.calculate_deductions.deduction_amount }}
+        
+        {% if steps.calculate_deductions.deduction_reasons | length > 0 %}
+        Deduction Reasons:
+        {% for reason in steps.calculate_deductions.deduction_reasons %}
+        • {{ reason }}
+        {% endfor %}
+        {% endif %}
+        
+        Refund ID: {{ steps.process_refund.refund_id }}
+    
+  - name: "audit_deposit_release"
+    description: "Log comprehensive audit entry"
+    tool: "backend_api"
+    inputs:
+      method: "POST"
+      endpoint: "/audit"
+      data:
+        event_type: "deposit_released"
+        entity_type: "rental"
+        entity_id: "{{ trigger.data.rental_id }}"
+        action: "deposit_processed"
+        details:
+          original_deposit: "{{ steps.fetch_rental_details.rental.deposit_amount }}"
+          refund_amount: "{{ steps.calculate_deductions.refund_amount }}"
+          deduction_amount: "{{ steps.calculate_deductions.deduction_amount }}"
+          damage_detected: "{{ steps.analyze_return_photos.damage_detected }}"
+          refund_id: "{{ steps.process_refund.refund_id }}"
+          processing_time: "{{ execution_time }}"
+
+# Success Metrics
+metrics:
+  - name: "processing_time"
+    value: "{{ execution_time }}"
+    target: "< 120"  # seconds
+    
+  - name: "auto_processing_rate"
+    value: "{{ (steps.process_refund.success and 1 or 0) * 100 }}"
+    target: "> 90"  # percentage
+    
+  - name: "user_satisfaction"
+    value: "{{ steps.notify_user.success and 100 or 0 }}"
+    target: "> 95"

@@ -1,0 +1,191 @@
+{
+  "name": "Daily License Expiry Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "value": "0 0 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.BACKEND_API_URL }}/users/kyc/documents",
+        "authentication": "headerAuth",
+        "headerAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{ $env.BACKEND_API_TOKEN }}"
+        },
+        "qs": {
+          "document_type": "license",
+          "expiry_within_days": "30"
+        }
+      },
+      "id": "fetch-licenses",
+      "name": "Fetch Expiring Licenses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Group licenses by urgency\nconst licenses = $input.all();\nconst groups = {\n  urgent: [],\n  warning: [],\n  notice: []\n};\n\nconst now = new Date();\n\nfor (const license of licenses) {\n  const expiryDate = new Date(license.json.expiry_date);\n  const daysToExpiry = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));\n  \n  if (daysToExpiry <= 7) {\n    groups.urgent.push({...license.json, days_to_expiry: daysToExpiry});\n  } else if (daysToExpiry <= 14) {\n    groups.warning.push({...license.json, days_to_expiry: daysToExpiry});\n  } else {\n    groups.notice.push({...license.json, days_to_expiry: daysToExpiry});\n  }\n}\n\nreturn [{ json: groups }];"
+      },
+      "id": "group-by-urgency",
+      "name": "Group by Urgency",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "content": "📋 **Daily License Expiry Report** - {{ $now.format('YYYY-MM-DD') }}\n\n🚨 **Urgent (≤7 days):** {{ $json.urgent.length }}\n⚠️ **Warning (≤14 days):** {{ $json.warning.length }}\nℹ️ **Notice (≤30 days):** {{ $json.notice.length }}\n\n{% if $json.urgent.length > 0 %}\n**Urgent Cases:**\n{% for license in $json.urgent %}\n• {{ license.user_name }} - {{ license.license_number }} ({{ license.days_to_expiry }} days)\n{% endfor %}\n{% endif %}\n\n_Automated by EV Platform License Tracker_",
+        "channel": "#license-tracking",
+        "username": "License Bot"
+      },
+      "id": "slack-digest",
+      "name": "Send Slack Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "to": "legal@evplatform.com",
+        "subject": "Daily License Expiry Report - {{ $now.format('YYYY-MM-DD') }}",
+        "emailFormat": "html",
+        "message": "<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Arial, sans-serif; }\n    .urgent { color: #d32f2f; }\n    .warning { color: #f57c00; }\n    .notice { color: #1976d2; }\n    table { border-collapse: collapse; width: 100%; }\n    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }\n    th { background-color: #f2f2f2; }\n  </style>\n</head>\n<body>\n  <h2>Daily License Expiry Report</h2>\n  <p><strong>Date:</strong> {{ $now.format('YYYY-MM-DD') }}</p>\n  \n  <h3>Summary</h3>\n  <ul>\n    <li class=\"urgent\">Urgent (≤7 days): {{ $json.urgent.length }}</li>\n    <li class=\"warning\">Warning (≤14 days): {{ $json.warning.length }}</li>\n    <li class=\"notice\">Notice (≤30 days): {{ $json.notice.length }}</li>\n  </ul>\n  \n  {% if $json.urgent.length > 0 %}\n  <h3 class=\"urgent\">Urgent Cases Requiring Immediate Action</h3>\n  <table>\n    <tr><th>User Name</th><th>License Number</th><th>Days to Expiry</th><th>Phone</th></tr>\n    {% for license in $json.urgent %}\n    <tr>\n      <td>{{ license.user_name }}</td>\n      <td>{{ license.license_number }}</td>\n      <td class=\"urgent\">{{ license.days_to_expiry }}</td>\n      <td>{{ license.phone }}</td>\n    </tr>\n    {% endfor %}\n  </table>\n  {% endif %}\n  \n  <p><em>This is an automated report from EV Platform License Tracker.</em></p>\n</body>\n</html>"
+      },
+      "id": "email-legal",
+      "name": "Email Legal Team",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "calendarId": "legal@evplatform.com",
+        "start": "={{ $now.plus({days: 1}).toISO() }}",
+        "end": "={{ $now.plus({days: 1, hours: 1}).toISO() }}",
+        "summary": "License Expiry Follow-up Required",
+        "description": "{{ $json.urgent.length }} licenses require urgent follow-up.\n\nUrgent cases:\n{% for license in $json.urgent %}\n• {{ license.user_name }} - {{ license.license_number }} ({{ license.days_to_expiry }} days)\n  Phone: {{ license.phone }}\n{% endfor %}\n\nGenerated by EV Platform automation."
+      },
+      "id": "calendar-event",
+      "name": "Create Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.BACKEND_API_URL }}/audit",
+        "authentication": "headerAuth",
+        "headerAuth": {
+          "name": "Authorization",
+          "value": "Bearer {{ $env.BACKEND_API_TOKEN }}"
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "event_type": "license_digest_completed",
+          "entity_type": "automation",
+          "action": "daily_digest",
+          "details": {
+            "total_licenses": "={{ $('Group by Urgency').item.json.urgent.length + $('Group by Urgency').item.json.warning.length + $('Group by Urgency').item.json.notice.length }}",
+            "urgent_count": "={{ $('Group by Urgency').item.json.urgent.length }}",
+            "notifications_sent": 3,
+            "execution_time": "={{ $now.toISO() }}"
+          }
+        }
+      },
+      "id": "audit-log",
+      "name": "Log to Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Daily Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Expiring Licenses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Expiring Licenses": {
+      "main": [
+        [
+          {
+            "node": "Group by Urgency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group by Urgency": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Digest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Legal Team",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Digest": {
+      "main": [
+        [
+          {
+            "node": "Log to Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "license-digest-error-handler"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-15T00:00:00.000Z",
+      "updatedAt": "2024-01-15T00:00:00.000Z",
+      "id": "license-automation",
+      "name": "License Automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T00:00:00.000Z",
+  "versionId": "1"
+}

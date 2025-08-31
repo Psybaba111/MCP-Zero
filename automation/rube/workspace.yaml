@@ -1,0 +1,95 @@
+# Rube Workspace Configuration for EV Platform
+# MCP-Zero enabled automation playbooks
+
+workspace:
+  name: "ev-platform-automation"
+  version: "1.0.0"
+  description: "Automation workflows for EV platform operations"
+  
+  # MCP-Zero Configuration
+  mcp_zero:
+    enabled: true
+    endpoint: "http://localhost:3001/mcp-zero"
+    discovery_interval: 300  # 5 minutes
+    fallback_mode: "static"
+    
+  # Environment Variables
+  environment:
+    BACKEND_API_URL: "${BACKEND_API_URL:-http://localhost:8000/api/v1}"
+    SLACK_WEBHOOK_URL: "${SLACK_WEBHOOK_URL}"
+    NOTION_API_KEY: "${NOTION_API_KEY}"
+    NOTION_DATABASE_ID: "${NOTION_DATABASE_ID}"
+    TWILIO_ACCOUNT_SID: "${TWILIO_ACCOUNT_SID}"
+    TWILIO_AUTH_TOKEN: "${TWILIO_AUTH_TOKEN}"
+    GMAIL_API_KEY: "${GMAIL_API_KEY}"
+
+  # Channels Configuration
+  channels:
+    slack:
+      default_channel: "#ev-platform-ops"
+      error_channel: "#ev-platform-alerts"
+    
+    email:
+      legal_email: "legal@evplatform.com"
+      ops_email: "ops@evplatform.com"
+    
+    notion:
+      run_log_db: "${NOTION_RUN_LOG_DB_ID}"
+      compliance_db: "${NOTION_COMPLIANCE_DB_ID}"
+
+# Playbooks
+playbooks:
+  - name: "kyc-approval-loop"
+    file: "./playbooks/kyc_approval.yaml"
+    enabled: true
+    mcp_zero_enabled: true
+    
+  - name: "license-expiry-reminder"
+    file: "./playbooks/license_reminder.yaml"
+    enabled: true
+    mcp_zero_enabled: true
+    
+  - name: "rental-return-deposit-release"
+    file: "./playbooks/deposit_release.yaml"
+    enabled: true
+    mcp_zero_enabled: true
+    
+  - name: "surge-rollback"
+    file: "./playbooks/surge_rollback.yaml"
+    enabled: true
+    mcp_zero_enabled: true
+    
+  - name: "ride-paid-notification"
+    file: "./playbooks/ride_notification.yaml"
+    enabled: true
+    mcp_zero_enabled: false  # Use static tools for critical path
+    
+  - name: "rental-booked-notification"
+    file: "./playbooks/rental_notification.yaml"
+    enabled: true
+    mcp_zero_enabled: false  # Use static tools for critical path
+
+# Static Tool Fallbacks (when MCP-Zero is disabled)
+static_tools:
+  - name: "slack_notify"
+    type: "webhook"
+    config:
+      url: "${SLACK_WEBHOOK_URL}"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        
+  - name: "notion_create"
+    type: "api"
+    config:
+      base_url: "https://api.notion.com/v1"
+      headers:
+        Authorization: "Bearer ${NOTION_API_KEY}"
+        Notion-Version: "2022-06-28"
+        
+  - name: "backend_api"
+    type: "api"
+    config:
+      base_url: "${BACKEND_API_URL}"
+      headers:
+        Content-Type: "application/json"
