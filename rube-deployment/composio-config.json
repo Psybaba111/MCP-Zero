@@ -1,0 +1,183 @@
+{
+  "name": "ev-platform-automation",
+  "description": "EV Platform automation workflows with Rube/Composio integration",
+  "version": "1.0.0",
+  "integrations": [
+    {
+      "name": "slack",
+      "app_id": "slack",
+      "description": "Operations notifications and team communication",
+      "required_scopes": [
+        "chat:write",
+        "channels:read",
+        "users:read",
+        "files:write"
+      ],
+      "channels": {
+        "operations": "#ev-platform-ops",
+        "alerts": "#ev-platform-alerts",
+        "kyc_review": "#kyc-review",
+        "ride_ops": "#ride-ops",
+        "rental_ops": "#rental-ops",
+        "finance_ops": "#finance-ops",
+        "license_tracking": "#license-tracking"
+      }
+    },
+    {
+      "name": "gmail",
+      "app_id": "gmail",
+      "description": "Email notifications for compliance and legal",
+      "required_scopes": [
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ],
+      "templates": {
+        "license_reminder": "license-expiry-reminder.html",
+        "kyc_approval": "kyc-status-update.html",
+        "deposit_release": "deposit-processed.html"
+      }
+    },
+    {
+      "name": "google_calendar",
+      "app_id": "googlecalendar",
+      "description": "Calendar events for rental schedules and legal follow-ups",
+      "required_scopes": [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/calendar.events"
+      ],
+      "calendars": {
+        "legal": "legal@evplatform.com",
+        "operations": "ops@evplatform.com",
+        "rentals": "rentals@evplatform.com"
+      }
+    },
+    {
+      "name": "notion",
+      "app_id": "notion",
+      "description": "Run logs, compliance tracking, and documentation",
+      "required_scopes": [
+        "read",
+        "write"
+      ],
+      "databases": {
+        "run_logs": "${NOTION_RUN_LOG_DB_ID}",
+        "compliance_tracker": "${NOTION_COMPLIANCE_DB_ID}",
+        "vehicle_approvals": "${NOTION_VEHICLE_APPROVALS_DB_ID}"
+      }
+    },
+    {
+      "name": "twilio",
+      "app_id": "twilio",
+      "description": "SMS notifications for urgent alerts",
+      "auth_type": "api_key",
+      "config": {
+        "account_sid": "${TWILIO_ACCOUNT_SID}",
+        "auth_token": "${TWILIO_AUTH_TOKEN}",
+        "from_number": "${TWILIO_PHONE_NUMBER}"
+      }
+    },
+    {
+      "name": "hyperswitch",
+      "app_id": "custom_api",
+      "description": "Payment processing and refund handling",
+      "auth_type": "api_key",
+      "config": {
+        "base_url": "https://sandbox.hyperswitch.io",
+        "api_key": "${HYPERSWITCH_API_KEY}",
+        "webhook_secret": "${HYPERSWITCH_WEBHOOK_SECRET}"
+      }
+    },
+    {
+      "name": "backend_api",
+      "app_id": "custom_api",
+      "description": "EV Platform backend API",
+      "auth_type": "bearer_token",
+      "config": {
+        "base_url": "${BACKEND_API_URL}",
+        "auth_token": "${BACKEND_API_TOKEN}"
+      }
+    },
+    {
+      "name": "linear",
+      "app_id": "linear",
+      "description": "Issue tracking for bugs and feature requests",
+      "required_scopes": [
+        "read",
+        "write"
+      ],
+      "config": {
+        "team_id": "${LINEAR_TEAM_ID}",
+        "project_id": "${LINEAR_PROJECT_ID}"
+      }
+    },
+    {
+      "name": "pagerduty",
+      "app_id": "pagerduty",
+      "description": "Incident management and alerting",
+      "auth_type": "api_key",
+      "config": {
+        "api_key": "${PAGERDUTY_API_KEY}",
+        "service_id": "${PAGERDUTY_SERVICE_ID}"
+      }
+    }
+  ],
+  "workflows": [
+    {
+      "name": "kyc_approval_flow",
+      "description": "Automated KYC document processing and approval",
+      "trigger": "webhook",
+      "integrations_used": ["backend_api", "slack", "notion", "gmail"],
+      "file": "workflows/kyc_approval_flow.py"
+    },
+    {
+      "name": "license_expiry_monitor",
+      "description": "Daily license expiry monitoring and notifications",
+      "trigger": "cron",
+      "schedule": "0 0 * * *",
+      "integrations_used": ["backend_api", "slack", "gmail", "google_calendar", "twilio"],
+      "file": "workflows/license_expiry_monitor.py"
+    },
+    {
+      "name": "deposit_release_automation",
+      "description": "Automated deposit release after vehicle return",
+      "trigger": "webhook",
+      "integrations_used": ["backend_api", "hyperswitch", "slack", "notion"],
+      "file": "workflows/deposit_release_automation.py"
+    },
+    {
+      "name": "ride_assignment_flow",
+      "description": "Ride payment confirmation and driver assignment",
+      "trigger": "webhook",
+      "integrations_used": ["backend_api", "slack", "twilio"],
+      "file": "workflows/ride_assignment_flow.py"
+    },
+    {
+      "name": "rental_booking_flow",
+      "description": "Rental booking confirmations and notifications",
+      "trigger": "webhook",
+      "integrations_used": ["backend_api", "slack", "gmail", "google_calendar"],
+      "file": "workflows/rental_booking_flow.py"
+    },
+    {
+      "name": "incident_management",
+      "description": "Critical system alerts and incident response",
+      "trigger": "webhook",
+      "integrations_used": ["backend_api", "pagerduty", "slack", "linear"],
+      "file": "workflows/incident_management.py"
+    }
+  ],
+  "environment_variables": {
+    "BACKEND_API_URL": "https://api.evplatform.com/api/v1",
+    "BACKEND_API_TOKEN": "your-backend-api-token",
+    "HYPERSWITCH_API_KEY": "your-hyperswitch-key",
+    "HYPERSWITCH_WEBHOOK_SECRET": "your-webhook-secret",
+    "SLACK_WEBHOOK_URL": "your-slack-webhook-url",
+    "NOTION_API_KEY": "your-notion-api-key",
+    "NOTION_RUN_LOG_DB_ID": "your-notion-db-id",
+    "TWILIO_ACCOUNT_SID": "your-twilio-sid",
+    "TWILIO_AUTH_TOKEN": "your-twilio-token",
+    "TWILIO_PHONE_NUMBER": "your-twilio-number",
+    "LINEAR_TEAM_ID": "your-linear-team-id",
+    "PAGERDUTY_API_KEY": "your-pagerduty-key"
+  }
+}

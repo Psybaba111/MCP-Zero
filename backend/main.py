@@ -14,6 +14,7 @@ import logging
 
 from database import init_db
 from routers import users, vehicles, rides, parcels, rentals, payments, rewards, audit
+from rube_deployment.webhook_integration import router as rube_router
 from middleware.auth import get_current_user
 from middleware.logging import setup_logging, LoggingMiddleware
 from middleware.error_tracking import ErrorTrackingMiddleware, metrics
@@ -62,6 +63,7 @@ app.include_router(rentals.router, prefix="/api/v1/rentals", tags=["rentals"])
 app.include_router(payments.router, prefix="/api/v1/payments", tags=["payments"])
 app.include_router(rewards.router, prefix="/api/v1/rewards", tags=["rewards"])
 app.include_router(audit.router, prefix="/api/v1/audit", tags=["audit"])
+app.include_router(rube_router, prefix="/api/v1/webhooks", tags=["rube-integration"])
 
 @app.get("/")
 async def root():
