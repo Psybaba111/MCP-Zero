@@ -1,0 +1,81 @@
+# Rube Configuration for EV Platform Automation
+version: "1.0"
+name: "ev-platform-automation"
+
+# MCP-Zero Configuration
+mcp_zero:
+  enabled: true
+  endpoint: "http://localhost:8001"
+  fallback_enabled: true
+  discovery_timeout: 5000
+
+# External Service Integrations
+integrations:
+  slack:
+    enabled: true
+    bot_token: "${SLACK_BOT_TOKEN}"
+    signing_secret: "${SLACK_SIGNING_SECRET}"
+    default_channel: "#ev-platform-ops"
+  
+  notion:
+    enabled: true
+    api_key: "${NOTION_API_KEY}"
+    database_id: "${NOTION_DATABASE_ID}"
+  
+  twilio:
+    enabled: true
+    account_sid: "${TWILIO_ACCOUNT_SID}"
+    auth_token: "${TWILIO_AUTH_TOKEN}"
+  
+  pagerduty:
+    enabled: true
+    api_key: "${PAGERDUTY_API_KEY}"
+    service_id: "${PAGERDUTY_SERVICE_ID}"
+
+# Backend API Configuration
+backend:
+  base_url: "${BACKEND_API_URL}"
+  api_key: "${BACKEND_API_KEY}"
+  timeout: 30000
+
+# Playbook Settings
+playbooks:
+  kyc_loop:
+    enabled: true
+    schedule: "0 */6 * * *"  # Every 6 hours
+    max_retries: 3
+    timeout: 300000
+  
+  license_reminder:
+    enabled: true
+    schedule: "0 9 * * *"  # Daily at 9 AM
+    max_retries: 2
+    timeout: 120000
+  
+  surge_rollback:
+    enabled: true
+    schedule: "*/15 * * * *"  # Every 15 minutes
+    max_retries: 1
+    timeout: 60000
+  
+  rental_return:
+    enabled: true
+    schedule: "0 */2 * * *"  # Every 2 hours
+    max_retries: 2
+    timeout: 180000
+
+# Logging Configuration
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
+  retention_days: 30
+
+# Monitoring
+monitoring:
+  metrics_enabled: true
+  health_check_interval: 60000
+  alert_thresholds:
+    playbook_failure_rate: 0.05
+    webhook_latency_p95: 2000
+    mcp_zero_discovery_time: 3000

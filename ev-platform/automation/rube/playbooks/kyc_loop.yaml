@@ -1,0 +1,189 @@
+# KYC Loop Playbook - Automated KYC Processing
+name: "kyc_loop"
+version: "1.0"
+description: "Automated KYC processing loop with police verification and approval workflow"
+
+# Trigger Configuration
+trigger:
+  type: "schedule"
+  schedule: "0 */6 * * *"  # Every 6 hours
+  enabled: true
+
+# Variables
+variables:
+  backend_url: "${BACKEND_API_URL}"
+  slack_channel: "#ev-platform-ops"
+  notion_database: "${NOTION_DATABASE_ID}"
+  max_retries: 3
+  timeout: 300000
+
+# Steps
+steps:
+  - name: "fetch_pending_kyc"
+    type: "http"
+    config:
+      method: "GET"
+      url: "${backend_url}/api/v1/compliance/kyc/pending"
+      headers:
+        Authorization: "Bearer ${BACKEND_API_KEY}"
+      timeout: 30000
+    
+    on_success:
+      - name: "log_kyc_count"
+        type: "log"
+        config:
+          message: "Found ${response.body.length} pending KYC requests"
+          level: "info"
+    
+    on_error:
+      - name: "notify_slack_error"
+        type: "slack"
+        config:
+          channel: "${slack_channel}"
+          message: "❌ Failed to fetch pending KYC requests: ${error.message}"
+          color: "danger"
+
+  - name: "process_kyc_batch"
+    type: "foreach"
+    config:
+      items: "${fetch_pending_kyc.response.body}"
+      max_concurrent: 5
+    
+    steps:
+      - name: "verify_kyc_documents"
+        type: "mcp_zero_discovery"
+        config:
+          endpoint: "${MCP_ZERO_ENDPOINT}"
+          tool_pattern: "kyc_verification|document_analysis|police_verification"
+          fallback: "static_kyc_verification"
+          timeout: 10000
+        
+        on_success:
+          - name: "log_verification_result"
+            type: "log"
+            config:
+              message: "KYC verification completed for user ${item.user_id}: ${response.status}"
+              level: "info"
+        
+        on_error:
+          - name: "fallback_verification"
+            type: "http"
+            config:
+              method: "POST"
+              url: "${backend_url}/api/v1/compliance/kyc/verify"
+              body:
+                user_id: "${item.user_id}"
+                verification_method: "manual_review"
+              headers:
+                Authorization: "Bearer ${BACKEND_API_KEY}"
+
+      - name: "update_kyc_status"
+        type: "http"
+        config:
+          method: "PUT"
+          url: "${backend_url}/api/v1/compliance/kyc/${item.user_id}/status"
+          body:
+            status: "${verify_kyc_documents.response.status}"
+            verified_at: "${now()}"
+            verification_notes: "${verify_kyc_documents.response.notes}"
+          headers:
+            Authorization: "Bearer ${BACKEND_API_KEY}"
+        
+        on_success:
+          - name: "create_audit_entry"
+            type: "http"
+            config:
+              method: "POST"
+              url: "${backend_url}/api/v1/audit"
+              body:
+                event_type: "kyc_verification_completed"
+                user_id: "${item.user_id}"
+                metadata:
+                  verification_method: "${verify_kyc_documents.response.method}"
+                  verification_time: "${verify_kyc_documents.response.processing_time}"
+              headers:
+                Authorization: "Bearer ${BACKEND_API_KEY}"
+
+      - name: "notify_user"
+        type: "conditional"
+        config:
+          condition: "${verify_kyc_documents.response.status == 'approved'}"
+        
+        steps:
+          - name: "send_approval_sms"
+            type: "twilio"
+            config:
+              to: "${item.phone}"
+              message: "🎉 Your KYC has been approved! You can now use all platform features."
+          
+          - name: "send_approval_email"
+            type: "http"
+            config:
+              method: "POST"
+              url: "${backend_url}/api/v1/notifications/email"
+              body:
+                user_id: "${item.user_id}"
+                template: "kyc_approved"
+                data:
+                  user_name: "${item.full_name}"
+                  approval_date: "${now()}"
+              headers:
+                Authorization: "Bearer ${BACKEND_API_KEY}"
+
+      - name: "update_notion"
+        type: "notion"
+        config:
+          database_id: "${notion_database}"
+          properties:
+            Title: "KYC Verification - ${item.full_name}"
+            Status: "${verify_kyc_documents.response.status}"
+            User: "${item.email}"
+            Submitted: "${item.kyc_submitted_at}"
+            Verified: "${now()}"
+            Notes: "${verify_kyc_documents.response.notes}"
+
+  - name: "send_summary_report"
+    type: "slack"
+    config:
+      channel: "${slack_channel}"
+      message: |
+        📊 KYC Processing Summary
+        • Total processed: ${process_kyc_batch.total_processed}
+        • Approved: ${process_kyc_batch.approved_count}
+        • Rejected: ${process_kyc_batch.rejected_count}
+        • Processing time: ${process_kyc_batch.total_time}ms
+      color: "good"
+
+# Error Handling
+error_handling:
+  max_retries: 3
+  retry_delay: 60000
+  on_final_failure:
+    - name: "notify_critical_failure"
+      type: "slack"
+      config:
+        channel: "#ev-platform-alerts"
+        message: "🚨 CRITICAL: KYC Loop playbook failed after ${max_retries} retries"
+        color: "danger"
+    
+    - name: "create_pagerduty_incident"
+      type: "pagerduty"
+      config:
+        service_id: "${PAGERDUTY_SERVICE_ID}"
+        title: "KYC Loop Playbook Failure"
+        description: "KYC processing automation has failed and requires immediate attention"
+        urgency: "high"
+
+# Success Metrics
+metrics:
+  - name: "kyc_processing_time"
+    type: "histogram"
+    description: "Time taken to process KYC requests"
+  
+  - name: "kyc_approval_rate"
+    type: "counter"
+    description: "Rate of KYC approvals vs rejections"
+  
+  - name: "mcp_zero_usage"
+    type: "counter"
+    description: "MCP-Zero tool discovery and usage metrics"

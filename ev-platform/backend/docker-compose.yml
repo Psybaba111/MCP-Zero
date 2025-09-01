@@ -1,0 +1,156 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ev_platform_postgres
+    environment:
+      POSTGRES_DB: ev_platform
+      POSTGRES_USER: ev_user
+      POSTGRES_PASSWORD: ev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - ev_platform_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ev_user -d ev_platform"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ev_platform_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ev_platform_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ev_platform_backend
+    environment:
+      - DATABASE_URL=postgresql://ev_user:ev_password@postgres:5432/ev_platform
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=your-secret-key-change-in-production
+      - HYPERSWITCH_PUBLIC_KEY=${HYPERSWITCH_PUBLIC_KEY}
+      - HYPERSWITCH_SECRET_KEY=${HYPERSWITCH_SECRET_KEY}
+      - HYPERSWITCH_WEBHOOK_SECRET=${HYPERSWITCH_WEBHOOK_SECRET}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - NOTION_API_KEY=${NOTION_API_KEY}
+      - PAGERDUTY_API_KEY=${PAGERDUTY_API_KEY}
+      - MCP_ZERO_ENDPOINT=${MCP_ZERO_ENDPOINT:-http://localhost:8001}
+      - MCP_ZERO_ENABLED=${MCP_ZERO_ENABLED:-true}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ev_platform_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Celery Worker for Background Tasks
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ev_platform_celery_worker
+    command: celery -A app.core.celery worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://ev_user:ev_password@postgres:5432/ev_platform
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./app:/app
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ev_platform_network
+    restart: unless-stopped
+
+  # Celery Beat for Scheduled Tasks
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ev_platform_celery_beat
+    command: celery -A app.core.celery beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://ev_user:ev_password@postgres:5432/ev_platform
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./app:/app
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ev_platform_network
+    restart: unless-stopped
+
+  # Flower for Celery Monitoring
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ev_platform_flower
+    command: celery -A app.core.celery flower --port=5555
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - ev_platform_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  ev_platform_network:
+    driver: bridge
